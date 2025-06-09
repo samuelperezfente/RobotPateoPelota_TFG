@@ -1,0 +1,36 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="soccer_ball">
+    <static>false</static>
+    <link name="soccer_ball_link">
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.05459</mass>
+        <inertia>
+          <ixx>0.0000895</ixx>
+          <iyy>0.0000895</iyy>
+          <izz>0.0000895</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <sphere>
+            <radius>0.064</radius>
+          </sphere>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <scale>0.064 0.064 0.064</scale>
+            <uri>model://robocup_3Dsim_ball/meshes/ball.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>
+
