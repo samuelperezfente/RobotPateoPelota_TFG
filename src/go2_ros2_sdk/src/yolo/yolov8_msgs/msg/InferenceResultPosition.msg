@@ -7,3 +7,4 @@ float32 confidence
 int32 h
 int32 s
 int32 v
+geometry_msgs/Pose pose

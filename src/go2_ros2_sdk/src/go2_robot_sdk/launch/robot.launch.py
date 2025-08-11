@@ -52,7 +52,7 @@ def generate_launch_description():
 
     conn_type = os.getenv('CONN_TYPE', 'webrtc')
 
-    conn_mode = "single" if len(robot_ip_lst) == 1 and conn_type != "cyclonedds" else "multi"
+    conn_mode = "single" if len(robot_ip_lst) == 1 or conn_type == "cyclonedds" else "multi"
 
     if conn_mode == 'single':
         rviz_config = "single_robot_conf.rviz"
@@ -106,7 +106,7 @@ def generate_launch_description():
 
     if conn_mode == 'single':
 
-        urdf_file_name = 'go2.urdf'
+        urdf_file_name = 'go2_with_realsense.urdf'
         urdf = os.path.join(
             get_package_share_directory('go2_robot_sdk'),
             "urdf",
@@ -136,6 +136,7 @@ def generate_launch_description():
                 ],
                 parameters=[{
                     'target_frame': 'base_link',
+                    'min_height': -0.3,
                     'max_height': 0.5
                 }],
                 output='screen',

@@ -4,11 +4,14 @@ project(object_msgs)
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObjectsPosition.msg"
-  DEPENDENCIES geometry_msgs std_msgs
+  "msg/FrontDistance.msg"
+  "msg/FrontDetection.msg"
+  DEPENDENCIES geometry_msgs std_msgs visualization_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)

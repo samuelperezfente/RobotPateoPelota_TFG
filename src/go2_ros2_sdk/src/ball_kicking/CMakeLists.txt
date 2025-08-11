@@ -23,8 +23,13 @@ install(PROGRAMS
   scripts/calculate_and_move_to_ball.py
   scripts/ball_follower_depth.py
   scripts/points_cloud_filter.py
+  scripts/transform_pointcloud.py
+  scripts/sphere_detector.py
+  scripts/front_object_distance.py
   scripts/advance.py
-  scripts/ball_distance.py
+  scripts/detections_distance.py
+  scripts/start_kick.py
+  scripts/orbit_object.py
   launch/ball_kicking.launch.py
   DESTINATION lib/${PROJECT_NAME}
 )
