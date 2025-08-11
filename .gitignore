@@ -60,3 +60,11 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# Ignore records and videos
+Videos_pruebas
+records
+extracted_frames
+src/go2_ros2_sdk/prueba_total*
+src/go2_ros2_sdk/shake_hands_record
+src/go2_ros2_sdk/orbit
