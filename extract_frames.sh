@@ -172,4 +172,3 @@ fi
 
 rm -rf "$BAG_OUT_DIR"
 rm -rf "$MOV_OUT_DIR"
-

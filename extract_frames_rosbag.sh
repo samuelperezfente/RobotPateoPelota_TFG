@@ -2,6 +2,7 @@
 
 # ========== CONFIGURACIÓN ==========
 BAG_IN_DIR="records"
+BAG_NAME="$1"
 BAG_FILE="$BAG_IN_DIR/$1"
 BAG_START="$2"
 BAG_END="$3"
@@ -19,6 +20,24 @@ OUT2="$OUT_DIR_BASE/usb_cam0"
 OUT3="$OUT_DIR_BASE/usb_cam1"
 
 FASES_FILE="$OUT_DIR_BASE/fases.txt"
+FILTER_FILE="$OUT_DIR_BASE/filtro_ffmpeg.txt"
+
+MAIN_SCALE="1280:720"
+SMALL_SCALE="320:180"
+SMALL_POSITION1="W-w-20:20"
+SMALL_POSITION2="20:20"
+
+PHASE_POSITION_X="(w-text_w)/2"
+PHASE_POSITION_Y="20"
+
+SUBPHASE_POSITION_X="(w-text_w)/2"
+SUBPHASE_POSITION_Y="60"
+
+
+VAR_POSITION_X="20"
+VAR_Y_OFFSET=220
+VAR_LINE_HEIGHT=40
+
 
 
 # ROOT_OUT_DIR="extracted_frames"
@@ -39,23 +58,23 @@ extract_from_bag() {
   # Lanzar image_saver para cada tópico en su grupo de proceso
   (sleep 1; ros2 run image_view image_saver --ros-args --remap image:="$TOPIC1" --param filename_format:="$OUT1/frame_%05d.png") &
   PID1=$!
-  echo $PID1
+  # echo $PID1
   # PGID1=$(ps -o pgid= $PID1 | tr -d ' ')
 
   (sleep 1; ros2 run image_view image_saver --ros-args --remap image:="$TOPIC2" --param filename_format:="$OUT2/frame_%05d.png") &
   PID2=$!
-  echo $PID2
+  # echo $PID2
   # PGID2=$(ps -o pgid= $PID2 | tr -d ' ')
 
   (sleep 1; ros2 run image_view image_saver --ros-args --remap image:="$TOPIC3" --param filename_format:="$OUT3/frame_%05d.png") &
   PID3=$!
-  echo $PID3
+  # echo $PID3
   # PGID3=$(ps -o pgid= $PID3 | tr -d ' ')
 
   # Lanzar rosbag play pausado en su propio grupo
   ros2 bag play "$BAG_FILE" --start-offset "$BAG_START" --start-paused &
   BAG_PID=$!
-  echo $BAG_PID
+  # echo $BAG_PID
   # BAG_PGID=$(ps -o pgid= $BAG_PID | tr -d ' ')
 
   echo "⏳ Esperando a que el rosbag esté listo..."
@@ -84,7 +103,7 @@ extract_from_bag() {
   ) &
 
   PID_FASES=$!
-  echo $PID_FASES
+  # echo $PID_FASES
   # PGID_FASES=$(ps -o pgid= $PID_FASES | tr -d ' ')
 
   # Esperar duración deseada
@@ -111,7 +130,7 @@ extract_from_bag() {
   # Matar grupos de procesos (con signo menos)
   kill $PID1 $PID2 $PID3 $BAG_PID $PID_FASES
 
-  echo "PIDS: $PID1 $PID2 $PID3 $BAG_PID $PID_FASES"
+  # echo "PIDS: $PID1 $PID2 $PID3 $BAG_PID $PID_FASES"
 
   # Por si queda algo colgado, matar image_saver suelto
 
@@ -147,83 +166,105 @@ create_video_from_bag_frames() {
 
 combine_videos_side_by_side() {
   echo "▶️ Combinando videos..."
-  local OUTPUT_VIDEO="$OUT_DIR_BASE/multiples_vistas_combinado.mp4"
+  local OUTPUT_VIDEO="$OUT_DIR_BASE/$BAG_NAME.mp4"
+  
+
+  echo "ℹ️ Generando filtro en $FILTER_FILE"
+  : > "$FILTER_FILE"  # limpiar archivo
 
   # Filtro base inicial con escalado y overlays
-  local FILTER_COMPLEX="
-    [0:v]scale=1280:720[main];
-    [1:v]scale=320:180[small1];
-    [2:v]scale=320:180[small2];
-    [main][small1]overlay=W-w-20:20[tmp1];
-    [tmp1][small2]overlay=20:20
-  "
+  {
+    echo "[0:v]scale=$MAIN_SCALE[main];"
+    echo "[1:v]scale=$SMALL_SCALE[small1];"
+    echo "[2:v]scale=$SMALL_SCALE[small2];"
+    echo "[main][small1]overlay=$SMALL_POSITION1[tmp1];"
+    echo "[tmp1][small2]overlay=$SMALL_POSITION2"
+  } >> "$FILTER_FILE"
 
   if [ -f "$FASES_FILE" ]; then
-    echo "ℹ️ Añadiendo texto de fases desde $FASES_FILE"
+    echo "ℹ️ Añadiendo texto (todas las líneas sin filtrar cambios) desde $FASES_FILE"
     mapfile -t LINES < "$FASES_FILE"
-
-    last_phase=""
-    last_start=0
-    local DRAWTEXTS=""
 
     for ((i=0; i < ${#LINES[@]}; i++)); do
       START=$(echo "${LINES[$i]}" | cut -d';' -f1)
+      END=$(echo "${LINES[$i+1]}" | cut -d';' -f1)
+      [ -z "$END" ] && END="$BAG_REAL_DURATION"
+
       RAW_TEXT=$(echo "${LINES[$i]}" | cut -d';' -f2-)
-      PHASE_TEXT=$(echo "$RAW_TEXT" | cut -d'|' -f1)
 
-      echo "Texto phase 0: $PHASE_TEXT"
+      # --- Fase ---
+      PHASE_PART=$(echo "$RAW_TEXT" | cut -d'|' -f1)
+      PHASE_PART=${PHASE_PART#"msg: '"}
+      PHASE_PART=${PHASE_PART%"'"}
+      PHASE_PART=$(echo "$PHASE_PART" | sed 's/^ *//; s/ *$//')
 
-      # Quitar prefijo y sufijo
-      PHASE_TEXT=${PHASE_TEXT#"msg: '"}
-      echo "Texto phase 1: $PHASE_TEXT"
-      PHASE_TEXT=${PHASE_TEXT%"'"}
+      if [[ "$PHASE_PART" == *";"* ]]; then
+          # Hay subfase
+          PHASE_TEXT=$(echo "$PHASE_PART" | cut -d';' -f1 | sed 's/^ *//; s/ *$//')
+          SUBPHASE_TEXT=$(echo "$PHASE_PART" | cut -d';' -f2- | sed 's/^ *//; s/ *$//')
 
-      # Escapar comillas simples internas
-      PHASE_TEXT_ESCAPED=$(echo "$PHASE_TEXT" | sed "s/'/\\\\'/g")
+          PHASE_TEXT_ESCAPED=$(echo "$PHASE_TEXT" | sed "s/'/\\\\'/g" | sed 's/:/\\:/g')
+          echo ",drawtext=text='$PHASE_TEXT_ESCAPED':fontcolor=white:fontsize=30:x=$PHASE_POSITION_X:y=$PHASE_POSITION_Y:enable='between(t,$START,$END)'" >> "$FILTER_FILE"
 
-      echo "Texto escapado 0: $PHASE_TEXT_ESCAPED"
+          SUBPHASE_TEXT_ESCAPED=$(echo "$SUBPHASE_TEXT" | sed "s/'/\\\\'/g" | sed 's/:/\\:/g')
+          echo ",drawtext=text='$SUBPHASE_TEXT_ESCAPED':fontcolor=white:fontsize=24:x=$SUBPHASE_POSITION_X:y=$SUBPHASE_POSITION_Y:enable='between(t,$START,$END)'" >> "$FILTER_FILE"
+      else
+          # Solo fase
+          PHASE_TEXT_ESCAPED=$(echo "$PHASE_PART" | sed "s/'/\\\\'/g" | sed 's/:/\\:/g')
+          echo ",drawtext=text='$PHASE_TEXT_ESCAPED':fontcolor=white:fontsize=30:x=$PHASE_POSITION_X:y=$PHASE_POSITION_Y:enable='between(t,$START,$END)'" >> "$FILTER_FILE"
+      fi
 
-      PHASE_TEXT_ESCAPED=$(echo "$PHASE_TEXT_ESCAPED" | sed 's/:/\\:/g')
+      # --- Variables ---
+      if [[ "$RAW_TEXT" == *"|"* ]]; then
+        VARS_PART=$(echo "$RAW_TEXT" | cut -d'|' -f2-)
+        VARS_PART=$(echo "$VARS_PART" | sed 's/^ *//; s/ *$//')
 
-      # Quitar espacios finales
-      PHASE_TEXT_ESCAPED=$(echo "$PHASE_TEXT_ESCAPED" | sed 's/[[:space:]]*$//')
+        if [ -n "$VARS_PART" ]; then
+          IFS='|' read -ra VARS_ARRAY <<< "$VARS_PART"
 
-      echo "Texto raw: $RAW_TEXT"
-      echo "Texto phase 2: $PHASE_TEXT"
-      echo "Texto escapado 1: $PHASE_TEXT_ESCAPED"
+          for ((v=0; v<${#VARS_ARRAY[@]}; v++)); do
+            var_entry=$(echo "${VARS_ARRAY[$v]}" | sed 's/^ *//; s/ *$//')
 
+            # Eliminar comillas simples iniciales y finales de var_entry si existen
+            var_entry=${var_entry#"'"}
+            var_entry=${var_entry%"'"}
 
-      if [ "$PHASE_TEXT_ESCAPED" != "$last_phase" ]; then
-        if [ -n "$last_phase" ]; then
-          END="$START"
-          DRAWTEXTS+=",drawtext=text='$last_phase':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=20:enable='between(t,$last_start,$END)'"
+            if [ -n "$var_entry" ]; then
+              IFS=';' read -ra parts <<< "$var_entry"
+              var_name=$(echo "${parts[0]}" | sed 's/^ *//; s/ *$//')
+              var_value=$(echo "${parts[1]}" | sed 's/^ *//; s/ *$//')
+              var_status=$(echo "${parts[2]}" | sed 's/^ *//; s/ *$//')
+
+              var_line="$var_name: $var_value ($var_status)"
+              VAR_ESCAPED=$(echo "$var_line" | sed "s/'/\\\\'/g" | sed 's/:/\\:/g')
+
+              echo ",drawtext=text='$VAR_ESCAPED':fontcolor=white:fontsize=18:x=$VAR_POSITION_X:y=$(($VAR_Y_OFFSET + v*$VAR_LINE_HEIGHT)):enable='between(t,$START,$END)'" >> "$FILTER_FILE"
+            fi
+          done
         fi
-        last_phase="$PHASE_TEXT_ESCAPED"
-        last_start="$START"
+      else
+        # No hay variables, no hacer nada aquí
+        :
       fi
     done
-
-    if [ -n "$last_phase" ]; then
-      DRAWTEXTS+=",drawtext=text='$last_phase':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=20:enable='between(t,$last_start,$BAG_REAL_DURATION)'"
-    fi
-
-
-    FILTER_COMPLEX+="$DRAWTEXTS"
   else
     echo "⚠️ No se encontró el archivo $FASES_FILE. No se añade texto."
   fi
 
-  echo " Filtro: $FILTER_COMPLEX"
-
+  echo "ℹ️ Ejecutando FFmpeg con -filter_complex_script"
   ffmpeg -y \
     -i "$OUT2/bag_video_30fps.mp4" \
     -i "$OUT1/bag_video_30fps.mp4" \
     -i "$OUT3/bag_video_30fps.mp4" \
-    -filter_complex "$FILTER_COMPLEX" \
+    -filter_complex_script "$FILTER_FILE" \
     -c:v libx264 -crf 18 -preset veryfast "$OUTPUT_VIDEO"
 
   echo "✅ Vídeo final guardado en $OUTPUT_VIDEO"
 }
+
+
+
+
 
 # ========== EJECUCIÓN ==========
 
@@ -250,6 +291,7 @@ rm -rf "$OUT2"
 rm -rf "$OUT3"
 
 rm -rf "$FASES_FILE"
+rm -rf "$FILTER_FILE"
 
 pkill -f awk
 pkill -f image_saver

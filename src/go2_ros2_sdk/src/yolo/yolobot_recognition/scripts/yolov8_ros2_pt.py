@@ -9,6 +9,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import numpy as np
 import cv2
+import json
 
 from yolov8_msgs.msg import InferenceResult
 from yolov8_msgs.msg import Yolov8Inference
@@ -24,9 +25,20 @@ class Camera_subscriber(Node):
         self.declare_parameter('result_topic', '/Yolov8_Inference')
         self.declare_parameter('annotated_topic', '/inference_result')
 
+        self.declare_parameter(
+            'target_kick',
+            '{"name": "Ball", "color_name": "azul"}'
+        )
+        self.declare_parameter(
+            'target_goal',
+            '{"name": "Bottle", "color_name": "verde"}'
+        )
+
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
         result_topic = self.get_parameter('result_topic').get_parameter_value().string_value
         annotated_topic = self.get_parameter('annotated_topic').get_parameter_value().string_value
+        target_kick_str = self.get_parameter('target_kick').get_parameter_value().string_value
+        target_goal_str = self.get_parameter('target_goal').get_parameter_value().string_value
 
         self.model = YOLO(model_path)
         self.yolov8_inference = Yolov8Inference()
@@ -53,12 +65,18 @@ class Camera_subscriber(Node):
             "rojo": (0, 200, 200),
             "naranja": (15, 200, 200),
             "verde": (60, 200, 200),
+            # "verde_oscuro": (70, 200, 50),
+            # "verde_claro": (55, 120, 110),
             "azul": (110, 200, 200),
             "blanco": (0, 20, 255),
-            "negro": (0, 0, 0),
+            # "negro": (0, 0, 0),
         }
-        self.target_kick = {"name": "Ball", "color_name": "azul"}
-        self.target_goal = {"name": "Ball", "color_name": "verde"}
+
+
+        self.target_kick = json.loads(target_kick_str)
+        self.target_goal = json.loads(target_goal_str)
+        # self.target_kick = {"name": "Ball", "color_name": "azul"}
+        # self.target_goal = {"name": "Ball", "color_name": "verde"}
 
     def apply_clahe(self, img_bgr):
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
@@ -127,7 +145,9 @@ class Camera_subscriber(Node):
                 hsv_median = (h_median, s_median, v_median)
                 color_name = self.closest_color_name(hsv_median)
                 class_name = self.model.names[int(c)]
-
+                # self.inference_result.class_name = class_name
+                print(class_name)
+                print(color_name)
                 self.inference_result.left = xmin
                 self.inference_result.top = ymin
                 self.inference_result.right = xmax
@@ -136,6 +156,8 @@ class Camera_subscriber(Node):
                 self.inference_result.h = h_median
                 self.inference_result.s = s_median
                 self.inference_result.v = v_median
+
+                # self.yolov8_inference.yolov8_inference.append(self.inference_result)
                 
 
                 if self.match_object(class_name, color_name, self.target_kick):     

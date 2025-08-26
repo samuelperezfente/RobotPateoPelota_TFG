@@ -38,21 +38,32 @@ class ObjectAligner(Node):
 
         self.center_exit = 125
         self.center_enter = 75
-        self.lateral_exit = 120
-        self.lateral_enter = 80
+        self.lateral_exit = 100
+        self.lateral_enter = 60
 
         self.too_far_exit = 1.0
         self.too_far_enter = 1.2
         self.too_close_exit = 2.5
         self.too_close_enter = 1.8
 
+        self.error_speed = 0.0005
+        self.retreat_speed = -0.12
+        self.advance_speed = 0.12
+
+
+
         self.angle_threshold = 0.07  # radianes
         self.close_threshold = 0.37
         self.far_threshold = 0.6
         self.too_close_threshold = 0.34
-        self.too_far_lateral_threshold = 0.08
+        self.too_far_lateral_threshold = 0.12
         self.lateral_distance_position = -0.037
         self.lateral_distance_threshold = 0.017
+
+        self.far_lateral_speed = 0.16
+        self.rotation_error_speed = 0.6
+        self.close_advance_error_speed = 0.4
+        self.lateral_error_speed = 0.4
 
         self.cooldown = 1.75 # segundos
 
@@ -74,33 +85,10 @@ class ObjectAligner(Node):
         self.timeout_to_phase_0 = 3.0
 
         self.min_speed = 0.12
-        self.max_speed = 0.2
-
-        # self.color_dict = {
-        #     "rojo": (0, 200, 200),
-        #     "naranja": (15, 200, 200),
-        #     "amarillo": (30, 200, 200),
-        #     "verde": (60, 200, 200),
-        #     "azul": (110, 200, 200),
-        #     "rosado": (140, 150, 200),
-        #     "morado": (160, 150, 150),
-        #     "blanco": (0, 20, 255),
-        #     "gris": (0, 20, 128),
-        #     "negro": (0, 0, 30)
-        # }
-
-        # self.color_dict = {
-        #     "rojo": (0, 200, 200),
-        #     "naranja": (15, 200, 200),
-        #     "verde": (60, 200, 200),
-        #     "azul": (110, 200, 200),
-        #     "blanco": (0, 20, 255),
-        # }
+        self.max_speed = 0.3
 
         self.target_kick_name = "kick_target"
-        # self.target_kick = {"name": "Ball", "color_name": "azul"}
         self.target_goal_name = "goal_target"
-        # self.target_goal = {"name": "Ball", "color_name": "verde"}
 
         self.kick_bbox = None
         self.goal_bbox = None
@@ -124,6 +112,10 @@ class ObjectAligner(Node):
         self.lateral_ok = True
         self.goal_rotation_ok = True
 
+        self.behavior_start_time = self.get_clock().now()
+        self.phase_start_time = None
+        self.phase_durations = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0}  # segundos
+
 
         self.inference_sub = self.create_subscription(
             Yolov8InferencePosition,
@@ -131,27 +123,6 @@ class ObjectAligner(Node):
             self.inference_callback,
             10
         )
-
-        # self.detections_marker_sub = self.create_subscription(
-        #     MarkerArray,
-        #     '/detections_marker_array',
-        #     self.marker_callback,
-        #     10
-        # )
-
-        # self.front_object_marker_sub = self.create_subscription(
-        #     Marker,
-        #     '/front_object_marker',
-        #     self.front_marker_callback,
-        #     10
-        # )
-
-        # self.front_object_distance_sub = self.create_subscription(
-        #     FrontDistance,
-        #     '/front_object_distance',
-        #     self.front_distances_callback,
-        #     10
-        # )
 
         self.front_object_detection_sub = self.create_subscription(
             FrontDetection,
@@ -167,8 +138,6 @@ class ObjectAligner(Node):
             10
         )
 
-        
-
         self.publisher_webrtc = self.create_publisher(WebRtcReq, '/webrtc_req', 10)
         self.publisher_sport_api = self.create_publisher(Request, '/api/sport/request', 10)
         self.publisher_vui_api = self.create_publisher(Request, '/api/vui/request', 10)
@@ -178,20 +147,12 @@ class ObjectAligner(Node):
 
 
         self.timer = self.create_timer(0.1, self.control_loop)
-        # self.time_led = self.create_timer(0.1, self.led_loop)
-
-    def led_loop(self):
-        if self.kick_completed:
-            return
-        
-        self.change_led_color()
 
     def control_loop(self):
         if self.kick_completed:
             return
         
         self.evaluate_phase()
-        # self.get_logger().info(f"Fase actual: {self.current_phase}")
         self.change_led_color_api()
         
         if self.current_phase == 1:
@@ -241,9 +202,6 @@ class ObjectAligner(Node):
         self.publisher_vui_api.publish(request)
         
     def evaluate_phase(self):
-        # Sería ideal que los cambios a fase 0 debido a perder de vista los balones tuviesen un contador de espera, 
-        #   ya que es normal que en un par de mensajes seguidos se pierda la posicion del balon debido a la posibilidad de que camara 
-        #   y lidar no estan del todo juntas debido al delay
         if self.current_phase == 3:
             return
         # === Fase 0: No se detecta nada o se pierde visión ===
@@ -326,18 +284,6 @@ class ObjectAligner(Node):
                     self.get_logger().info("❌ Posiciones no disponibles para análisis de distancia.")
                     self.request_phase_change(0)
                     return
-            
-            
-            # # Verificamos si el balón está más lejos que la portería → caso extraño
-            # dx_ball = self.front_object_position.x
-            # dx_goal = self.goal_marker_position.x
-
-            # if dx_ball - dx_goal > 0.15:
-            #     self.get_logger().info(f"⚠️ El balón detectado está más lejos que la portería. Fase 0 por detección incorrecta.")
-            #     self.current_phase = 0
-            # else:
-            #     self.get_logger().info("✅ Objetivos válidos detectados. Iniciando fase de alineación.")
-            #     self.current_phase = 1
  
             if self.current_phase != 2:
                 self.request_phase_change(1)
@@ -363,6 +309,15 @@ class ObjectAligner(Node):
             else:
                 elapsed = (now - self.time_since_lost_started).nanoseconds / 1e9
                 if elapsed >= self.timeout_to_phase_0:
+
+                    # Antes de cambiar a fase 0, acumulamos tiempo en fase actual
+                    if self.phase_start_time is not None and self.current_phase is not None:
+                        phase_elapsed = (now - self.phase_start_time).nanoseconds / 1e9
+                        self.phase_durations[self.current_phase] += phase_elapsed
+                        self.get_logger().info(f"⏱ Tiempo en fase {self.current_phase}: {phase_elapsed:.2f}s (acumulado: {self.phase_durations[self.current_phase]:.2f}s)")
+                    # Actualizamos tiempo de inicio de la nueva fase
+                    self.phase_start_time = now
+
                     self.get_logger().info(f"❌ Objetivos perdidos durante {elapsed:.2f}s. Cambio a fase 0 confirmado.")
                     self.current_phase = 0
                     self.time_since_lost_started = None
@@ -372,8 +327,19 @@ class ObjectAligner(Node):
         else:
             # Cambio a cualquier otra fase → se cancela cualquier temporizador
             if self.current_phase != desired_phase:
+                # Antes de cambiar, acumulamos tiempo en la fase actual
+                if self.phase_start_time is not None and self.current_phase is not None:
+                    phase_elapsed = (now - self.phase_start_time).nanoseconds / 1e9
+                    self.phase_durations[self.current_phase] += phase_elapsed
+                    self.get_logger().info(f"⏱ Tiempo en fase {self.current_phase}: {phase_elapsed:.2f}s (acumulado: {self.phase_durations[self.current_phase]:.2f}s)")
+                    # Actualizamos el tiempo de inicio de la nueva fase
+
+                self.phase_start_time = now
+
                 self.get_logger().info(f"🔄 Cambio de fase: {self.current_phase} → {desired_phase}")
+
             self.current_phase = desired_phase
+
             if self.time_since_lost_started is not None:
                 self.get_logger().info("✅ Objetivos recuperados. Cancelando temporizador de pérdida.")
                 self.time_since_lost_started = None
@@ -395,16 +361,14 @@ class ObjectAligner(Node):
 
         image_center = self.image_width // 2
         kick_center = self.get_center_x(self.kick_bbox)
-        # goal_center = self.get_center_x(self.goal_bbox)
         kick_offset = kick_center - image_center
-        # goal_offset = goal_center - image_center
 
         # Paso 1: Histéresis rotacional balón
         if not self.kick_centered:
             if abs(kick_offset) >= self.center_enter:
-                self.get_logger().info(f"Rotando: {-0.001 * kick_offset}.")
+                self.get_logger().info(f"Rotando: {-self.error_speed * kick_offset}.")
                 # self.move_axis('z', -0.001 * kick_offset)
-                vz = -0.0015 * kick_offset
+                vz = -self.error_speed * kick_offset
                 self.kick_offset_ok = False
                 
             else:
@@ -424,7 +388,7 @@ class ObjectAligner(Node):
             if ball_ratio > self.too_close_exit:
                 self.get_logger().info("🔙 Pelota demasiado cerca. Iniciando retroceso.")
                 # self.move_axis('x', -0.12)
-                vx = -0.12
+                vx = self.retreat_speed
                 self.retreat_active = True
                 self.advance_active = False
                 self.distance_ok = False
@@ -432,7 +396,7 @@ class ObjectAligner(Node):
         else:
             if ball_ratio > self.too_close_enter:
                 self.get_logger().info("⬅️ Retrocediendo aún, ratio alto.")
-                vx = -0.12
+                vx = self.retreat_speed
                 self.distance_ok = False
                 # self.move_axis('x', -0.12)
                 
@@ -445,7 +409,7 @@ class ObjectAligner(Node):
             if self.kick_bbox.bottom < (self.image_height - 80) or ball_ratio < self.too_far_exit:
                 self.get_logger().info("⚠️ Pelota lejos. Iniciando avance.")
                 # self.move_axis('x', 0.12)
-                vx = 0.12
+                vx = self.advance_speed
                 self.advance_active = True
                 self.retreat_active = False
                 self.distance_ok = False
@@ -454,7 +418,7 @@ class ObjectAligner(Node):
             if self.kick_bbox.bottom < (self.image_height - 80) or ball_ratio < self.too_far_enter:
                 self.get_logger().info("➡️ Avanzando hacia la pelota.")
                 # self.move_axis('x', 0.12)
-                vx = 0.12
+                vx = self.advance_speed
                 self.distance_ok = False
                 
             else:
@@ -470,13 +434,11 @@ class ObjectAligner(Node):
         kick_center = self.get_center_x(self.kick_bbox)
         goal_center = self.get_center_x(self.goal_bbox)
         offset_lateral = goal_center - kick_center
+
         if not self.goal_aligned_lateral:
             if abs(offset_lateral) >= self.lateral_enter:
-                lateral_direction = -1.0 if goal_center < kick_center else 1.0
-                self.get_logger().info(f"Desplazamiento lateral: {lateral_direction * 0.16}.")
-                # self.move_axis('y', lateral_direction * 0.12)
-                # vy = lateral_direction * 16
-                vy = offset_lateral * 0.001
+                self.get_logger().info(f"Desplazamiento lateral: {offset_lateral * self.error_speed}.")
+                vy = offset_lateral * self.error_speed
                 self.lateral_ok = False
                 
             else:
@@ -486,26 +448,9 @@ class ObjectAligner(Node):
             if abs(offset_lateral) >= self.lateral_exit:
                 print("Estabamos alineados pero pasamos a no estarlo")
                 self.goal_aligned_lateral = False
-                
 
-        # Paso 4: Centrado final de portería (rotación)
-        goal_center = self.get_center_x(self.goal_bbox)
-        goal_offset = goal_center - image_center
-        if not self.goal_centered:
-            if abs(goal_offset) >= self.center_enter:
-                self.get_logger().info(f"Ultima rotacion: {-0.001 * goal_offset}.")
-                # self.move_axis('z', -0.001 * goal_offset)
-                # vz = -0.001 * goal_offset
-                
-            else:
-                self.goal_centered = True
-        else:
-            if abs(goal_offset) >= self.center_exit:
-                self.goal_centered = False
-
-        # print(vy)
         if vx != 0.0 or vy != 0.0 or vz != 0.0:
-            self.log_alignment_status(kick_offset, ball_ratio, offset_lateral, goal_offset)
+            self.log_alignment_status(kick_offset, ball_ratio, offset_lateral)
             self.move(vx, vy, vz)
             return
 
@@ -514,23 +459,17 @@ class ObjectAligner(Node):
         self.alignment_completed = True
 
 
-    def log_alignment_status(self, kick_offset, ball_ratio, offset_lateral=None, goal_offset=None
-    ):
+    def log_alignment_status(self, kick_offset, ball_ratio, offset_lateral=None):
         log_msg = (
             f"Fase actual: Aliñamento | "
-            f"offset balón; {kick_offset:.1f}; {'OK' if self.kick_offset_ok else 'CORREGIR'} | "
-            f"ratio balón; {ball_ratio:.2f}; {'OK' if self.distance_ok else 'CORREGIR'}"
+            f"Centrado obx. pateo; {kick_offset:.1f}; {'OK' if self.kick_offset_ok else 'CORREGIR'} | "
+            f"Tamaño obx. pateo; {ball_ratio:.2f}; {'OK' if self.distance_ok else 'CORREGIR'}"
         )
 
         if offset_lateral is not None:
-            log_msg += f" | offset_lateral; {offset_lateral:.1f}; {'OK' if self.lateral_ok else 'CORREGIR'}"
+            log_msg += f" | Desplaz. lateral; {offset_lateral:.1f}; {'OK' if self.lateral_ok else 'CORREGIR'}"
         else:
-            log_msg += f" | offset_lateral; desconocido; desconocido"
-
-        if goal_offset is not None:
-            log_msg += f" | offset_goal; {goal_offset:.1f}; {'OK' if self.goal_rotation_ok else 'CORREGIR'}"
-        else:
-            log_msg += f" | offset_goal; desconocido; desconocido"
+            log_msg += f" | Desplaz. lateral; desconocido; desconocido"
 
         self.get_logger().info(log_msg)
 
@@ -574,19 +513,13 @@ class ObjectAligner(Node):
         if front_distance < self.too_close_threshold:
             backward_elapsed = (now - self.last_forward_move_time).nanoseconds / 1e9
 
-            # if self.last_move_type != "backward" and elapsed_since_switch < self.switch_cooldown:
-            #     self.get_logger().info(f"⏱ Esperando para cambiar a retroceso ({elapsed_since_switch:.2f}s < {self.switch_cooldown}s)")
-            #     return
-
             if backward_elapsed < self.cooldown:
                 self.get_logger().info(f"⌛ Esperando para nuevo retroceso ({backward_elapsed:.2f}s < {self.cooldown}s)")
                 return
 
             self.get_logger().info("⛔ Muy cerca del balón, iniciando retroceso.")
 
-            self.get_logger().info("Subfase: Retroceso por proximidade excesiva.")
-            # self.move_axis('x', -0.12)  # retroceso constante
-            self.move(-0.12, 0.0, 0.0)
+            self.move(self.retreat_speed, 0.0, 0.0)
             self.last_forward_move_time = now
             self.last_move_time = now
             self.last_move_type = "backward"
@@ -595,18 +528,17 @@ class ObjectAligner(Node):
         
         # === Paso 2: CORRECCION ALINEAMIENTO LATERAL MUY LEJANO ===
         if abs(lateral_distance) > self.too_far_lateral_threshold:
-            if self.last_move_type != "lateral" and elapsed_since_switch < self.switch_cooldown:
+            if self.last_move_type != "long_lateral" and elapsed_since_switch < self.switch_cooldown:
                 self.get_logger().info(f"⏱ Esperando para cambiar a movimiento lateral por lejanía ({elapsed_since_switch:.2f}s < {self.switch_cooldown}s)")
                 return
             
             lateral_direction = -1.0 if lateral_distance < 0 else 1.0
-            lateral_speed = lateral_direction * 0.16
+            lateral_speed = lateral_direction * self.far_lateral_speed
             self.get_logger().info(f"🔄 Corrigiendo erro lateral por lejanía: {lateral_speed:.2f}")
-            # self.move_axis('y', lateral_speed)
-            self.get_logger().info("Subfase: Corrección lateral.")
+
             self.move(0.0, lateral_speed, 0.0)
             self.last_move_time = now
-            self.last_move_type = "lateral"
+            self.last_move_type = "long_lateral"
             self.alignment_stable_since = None
             return
 
@@ -615,10 +547,9 @@ class ObjectAligner(Node):
             if self.last_move_type != "rotation" and elapsed_since_switch < self.switch_cooldown:
                 self.get_logger().info(f"⏱ Esperando para cambiar a rotación ({elapsed_since_switch:.2f}s < {self.switch_cooldown}s)")
                 return
-            rotation_speed = 0.6 * angle_error
+            rotation_speed = self.rotation_error_speed * angle_error
             self.get_logger().info(f"🔄 Corrigiendo orientación: {rotation_speed:.2f}")
-            # self.move_axis('z', rotation_speed)
-            self.get_logger().info("Subfase: Corrección da orientación.")
+
             self.move(0.0, 0.0, rotation_speed)
             self.last_move_time = now
             self.last_move_type = "rotation"
@@ -635,11 +566,9 @@ class ObjectAligner(Node):
                 self.get_logger().info(f"⏱ Esperando para cambiar a avance ({elapsed_since_switch:.2f}s < {self.switch_cooldown}s)")
                 return
 
-            front_speed = 0.4 * front_distance
-            front_speed = 0.12
+            front_speed = self.advance_speed
             self.get_logger().info(f"⬆️ Corrigiendo avance: {front_speed:.2f}")
-            # self.move_axis('x', front_speed)
-            self.get_logger().info("Subfase: Avance a longa distancia.")
+            
             self.move(front_speed, 0.0, 0.0)
             self.last_forward_move_time = now
             self.last_move_time = now
@@ -662,10 +591,10 @@ class ObjectAligner(Node):
                 self.get_logger().info(f"⌛ Esperando para nuevo avance cercano ({forward_elapsed:.2f}s < {self.cooldown}s)")
                 return
 
-            front_speed = 0.4 * front_distance
+            front_speed = self.close_advance_error_speed * front_distance
+
             self.get_logger().info(f"⬆️ Corrigiendo avance: {front_speed:.2f}")
-            # self.move_axis('x', front_speed)
-            self.get_logger().info("Subfase: Avance a curta distancia.")
+
             self.move(front_speed, 0.0, 0.0)
             self.last_forward_move_time = now
             self.last_move_time = now
@@ -690,10 +619,9 @@ class ObjectAligner(Node):
                 self.get_logger().info(f"⌛ Esperando para nuevo movimiento lateral ({lateral_elapsed:.2f}s < {self.cooldown}s)")
                 return
 
-            lateral_speed = 0.4 * lateral_error
+            lateral_speed = self.lateral_error_speed * lateral_error
             self.get_logger().info(f"🔁 Corrigiendo lateral: {lateral_speed:.2f}")
-            # self.move_axis('y', lateral_speed)
-            self.get_logger().info("Subfase: Aliñamento lateral.")
+
             self.move(0.0, lateral_speed, 0.0)
             self.last_lateral_move_time = now
             self.last_move_time = now
@@ -711,19 +639,6 @@ class ObjectAligner(Node):
             self.alignment_stable_since = now
             self.get_logger().info("🕒 Esperando estabilidad...")
 
-        # else:
-        #     stable_duration = (now - self.alignment_stable_since).nanoseconds / 1e9
-        #     self.get_logger().info(f"🕒 Esperando estabilidad... ({stable_duration})")
-        #     if stable_duration >= self.completed_stable_time:
-        #         self.get_logger().info("🎯 Alineación y posicionamiento completados de forma estable.")
-        #         self.send_webrtc_command(0.0, 0.0, 0.0)
-        #         self.approach_completed = True
-        #         self.last_move_type = "none"
-        #         self.send_webrtc_kick()
-        #     else:
-        #         self.get_logger().info(f"⌛ Manteniendo posición... {stable_duration:.2f}s / {self.completed_stable_time}s")
-
-
     def log_approach_status(self, angle_error, lateral_error, front_distance):
         # Cálculo de estados
         angle_deg = np.degrees(angle_error)
@@ -732,7 +647,9 @@ class ObjectAligner(Node):
         far = front_distance > self.close_threshold 
         too_close = front_distance < self.too_close_threshold
         lateral_ok = abs(lateral_error) <= self.lateral_distance_threshold
-        lateral_too_far = abs(lateral_error) > self.too_far_lateral_threshold
+
+        lateral_distance = lateral_error + self.lateral_distance_position
+        lateral_too_far = abs(lateral_distance) > self.too_far_lateral_threshold
 
         # Estado de cada componente
         estado_front = (
@@ -750,11 +667,25 @@ class ObjectAligner(Node):
 
         estado_angulo = "OK" if angle_ok else "CORREGIR"
 
+         # Determinar subfase según prioridad
+        if too_close:
+            subfase = "Retroceso"
+        elif lateral_too_far:
+            subfase = "Corrección lateral excesiva"
+        elif not angle_ok:
+            subfase = "Rotación"
+        elif too_far:
+            subfase = "Avance lonxano"
+        elif far:
+            subfase = "Avance cercano"
+        else:
+            subfase = "Corrección lateral"
+
         # Logger formateado
         self.get_logger().info(
-            f"Fase actual: Acercamento | front_distance; {front_distance:.2f}; {estado_front} | "
-            f"lateral_distance; {lateral_error:.2f}; {estado_lateral} | "
-            f"angle_error; {angle_deg:.2f}°; {estado_angulo}"
+            f"Fase actual: Acercamento; Subfase actual: {subfase} | Dist. frontal; {front_distance:.2f}; {estado_front} | "
+            f"Dist. lateral; {lateral_error:.2f}; {estado_lateral} | "
+            f"Error angular; {angle_deg:.2f}°; {estado_angulo}"
         )
  
 
@@ -764,6 +695,30 @@ class ObjectAligner(Node):
         self.get_logger().info(f"Pateo completado: distancia frontal actual {self.front_distances.distance_x}.")
         self.get_logger().info("Fase actual: Baixo nivel")
         self.kick_completed = True
+
+        # Marca el tiempo final del comportamiento
+        now = self.get_clock().now()
+        
+        # Sumar duración en la fase actual hasta este momento
+        if self.phase_start_time is not None and self.current_phase is not None:
+            phase_elapsed = (now - self.phase_start_time).nanoseconds / 1e9
+            self.phase_durations[self.current_phase] += phase_elapsed
+            self.get_logger().info(f"⏱ Tiempo en fase {self.current_phase} antes del pateo: {phase_elapsed:.2f}s")
+
+        # Calcular duración total del comportamiento
+        if self.behavior_start_time is not None:
+            total_elapsed = (now - self.behavior_start_time).nanoseconds / 1e9
+        else:
+            total_elapsed = 0.0
+        
+        # Imprimir duración total
+        self.get_logger().info(f"⏳ Tiempo total del comportamiento: {total_elapsed:.2f}s")
+        
+        # Imprimir tiempos por fase
+        for phase, duration in self.phase_durations.items():
+            self.get_logger().info(f"⏳ Tiempo total en fase {phase}: {duration:.2f}s")
+
+
 
 
     def normalize_angle(self, angle):
@@ -776,66 +731,16 @@ class ObjectAligner(Node):
         self.kick_bbox = None
         self.goal_bbox = None
         for det in msg.yolov8_inference:
-            # h, s, v = int(det.h), int(det.s), int(det.v)
-            # color_name = self.closest_color_name((h, s, v))
-            # print(color_name)
             if det.class_name == self.target_kick_name:
                 self.kick_bbox = det
             elif det.class_name == self.target_goal_name:
                 self.goal_bbox = det
                 self.goal_marker_position = det.pose.position
 
-            # if self.match_object(det, color_name, self.target_kick):
-            #     self.kick_bbox = det
-            # elif self.match_object(det, color_name, self.target_goal):
-            #     self.goal_bbox = det
-                # self.goal_marker_position = det.pose.position
-
-    # def front_marker_callback(self, msg: Marker):
-    #     self.front_object_position = msg.pose.position
-
-    # def front_distances_callback(self, msg: FrontDistance):
-    #     self.front_distances = msg
 
     def front_detection_callback(self, msg: FrontDetection):
         self.front_object_position = msg.marker.pose.position
         self.front_distances = msg.distance
-
-    # def marker_callback(self, msg: MarkerArray):
-    #     for marker in msg.markers:
-    #         r = int(marker.color.r * 255)
-    #         g = int(marker.color.g * 255)
-    #         b = int(marker.color.b * 255)
-    #         h, s, v = self.rgb_to_hsv_opencv_style(r, g, b)
-    #         color_name = self.closest_color_name((h, s, v))
-            
-    #         if color_name == self.target_goal["color_name"]:
-    #             # print("Color")
-    #             # print(color_name)
-    #             self.goal_marker_position = marker.pose.position
-    #             break
-
-    # def rgb_to_hsv_opencv_style(self, r, g, b):
-    #     r_n, g_n, b_n = r / 255.0, g / 255.0, b / 255.0
-    #     h, s, v = colorsys.rgb_to_hsv(r_n, g_n, b_n)
-    #     return int(h * 180), int(s * 255), int(v * 255)
-
-    # def closest_color_name(self, hsv_tuple):
-    #     h, s, v = hsv_tuple
-    #     min_dist = float('inf')
-    #     closest_name = None
-    #     for name, (ch, cs, cv) in self.color_dict.items():
-    #         dh = min(abs(h - ch), 180 - abs(h - ch)) / 180.0
-    #         ds = abs(s - cs) / 255.0
-    #         dv = abs(v - cv) / 255.0
-    #         dist = np.sqrt(dh * dh + ds * ds + dv * dv)
-    #         if dist < min_dist:
-    #             min_dist = dist
-    #             closest_name = name
-    #     return closest_name
-
-    # def match_object(self, det: InferenceResultPosition, color_name: str, target: dict):
-    #     return det.class_name == target["name"] and color_name == target["color_name"]
 
     def get_center_x(self, det):
         return (det.left + det.right) // 2
@@ -862,9 +767,6 @@ class ObjectAligner(Node):
         return speed
 
     def move_axis(self, axis, value):
-        # value = max(min(value, self.max_speed), -self.max_speed)
-        # if 0 < abs(value) < self.min_speed:
-        #     value = self.min_speed if value > 0 else -self.min_speed
 
         value = self.limit_speed(value)
 
