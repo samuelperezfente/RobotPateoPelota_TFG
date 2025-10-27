@@ -21,7 +21,7 @@ class Camera_subscriber(Node):
     def __init__(self):
         super().__init__('camera_subscriber')
 
-        self.declare_parameter('model_path', '/ros2_ws/src/go2_ros2_sdk/src/yolo/yolobot_recognition/scripts/bestv6.pt')
+        self.declare_parameter('model_path', '/ros2_ws/src/go2_ros2_sdk/src/yolo/yolobot_recognition/scripts/my_yolo11n.pt')
         self.declare_parameter('result_topic', '/Yolov8_Inference')
         self.declare_parameter('annotated_topic', '/inference_result')
 
@@ -31,7 +31,7 @@ class Camera_subscriber(Node):
         )
         self.declare_parameter(
             'target_goal',
-            '{"name": "Bottle", "color_name": "verde"}'
+            '{"name": "Ball", "color_name": "verde"}'
         )
 
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
