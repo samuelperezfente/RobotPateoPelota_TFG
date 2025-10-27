@@ -1,0 +1,10 @@
+{
+    "target_kick": {
+        "name": "Ball",
+        "color_name": "azul"
+    },
+    "target_goal": {
+        "name": "Ball",
+        "color_name": "verde"
+    }
+}

@@ -63,6 +63,7 @@ CATKIN_IGNORE
 
 # Ignore records and videos
 Videos_pruebas
+yolo_frames
 records
 extracted_frames
 src/go2_ros2_sdk/prueba_total*

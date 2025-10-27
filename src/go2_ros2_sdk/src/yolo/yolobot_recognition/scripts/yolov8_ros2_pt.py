@@ -5,6 +5,7 @@ from ultralytics import YOLO
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import numpy as np
@@ -21,62 +22,95 @@ class Camera_subscriber(Node):
     def __init__(self):
         super().__init__('camera_subscriber')
 
+        # Ruta del archivo JSON de configuración
+        self.json_path = '/ros2_ws/config/targets.json'
+        self.last_mtime = 0
+
+        # --- Parámetros ROS2 ---
         self.declare_parameter('model_path', '/ros2_ws/src/go2_ros2_sdk/src/yolo/yolobot_recognition/scripts/my_yolo11n.pt')
-        self.declare_parameter('result_topic', '/Yolov8_Inference')
-        self.declare_parameter('annotated_topic', '/inference_result')
+        self.declare_parameter('target_kick', '{"name": "Ball", "color_name": "azul"}')
+        self.declare_parameter('target_goal', '{"name": "Ball", "color_name": "verde"}')
 
-        self.declare_parameter(
-            'target_kick',
-            '{"name": "Ball", "color_name": "azul"}'
-        )
-        self.declare_parameter(
-            'target_goal',
-            '{"name": "Ball", "color_name": "verde"}'
-        )
+        # Registrar callback para cambios de parámetros dinámicos
+        self.add_on_set_parameters_callback(self.parameters_callback)
 
+        # --- Inicialización de YOLO ---
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
-        result_topic = self.get_parameter('result_topic').get_parameter_value().string_value
-        annotated_topic = self.get_parameter('annotated_topic').get_parameter_value().string_value
-        target_kick_str = self.get_parameter('target_kick').get_parameter_value().string_value
-        target_goal_str = self.get_parameter('target_goal').get_parameter_value().string_value
-
         self.model = YOLO(model_path)
-        self.yolov8_inference = Yolov8Inference()
 
-        qos_profile = QoSProfile(depth=10)
-        qos_profile.reliability = ReliabilityPolicy.BEST_EFFORT
+        # --- Lectura inicial del JSON ---
+        self.load_targets_from_json()
 
-        # self.subscription = self.create_subscription(
-        #     Image,
-        #     '/camera/image_raw',
-        #     self.camera_callback,
-        #     qos_profile)
-        
-        self.subscription = self.create_subscription(
+        # --- Crear publishers/subscribers ---
+        self.image_sub = self.create_subscription(
             Image,
             '/camera/color/image_raw',
             self.camera_callback,
-            qos_profile)
+            10
+        )
+        self.result_pub = self.create_publisher(Yolov8Inference, '/Yolov8_Inference', 10)
+        self.annotated_pub = self.create_publisher(Image, '/inference_result', 10)
 
-        self.yolov8_pub = self.create_publisher(Yolov8Inference, result_topic, 1)
-        self.img_pub = self.create_publisher(Image, annotated_topic, 1)
+        # --- Timer para detectar cambios en JSON cada 2 segundos ---
+        self.timer = self.create_timer(2.0, self.check_json_updates)
 
+        # --- Diccionario de colores HSV de referencia ---
         self.color_dict = {
             "rojo": (0, 200, 200),
             "naranja": (15, 200, 200),
             "verde": (60, 200, 200),
-            # "verde_oscuro": (70, 200, 50),
-            # "verde_claro": (55, 120, 110),
             "azul": (110, 200, 200),
             "blanco": (0, 20, 255),
-            # "negro": (0, 0, 0),
         }
 
+    # -------------------------------------------------------------------------
+    # LECTURA Y ACTUALIZACIÓN DEL ARCHIVO JSON
+    # -------------------------------------------------------------------------
+    def load_targets_from_json(self):
+        """Carga los targets desde el archivo JSON."""
+        if not os.path.exists(self.json_path):
+            self.get_logger().warn(f"No se encontró {self.json_path}")
+            return
 
-        self.target_kick = json.loads(target_kick_str)
-        self.target_goal = json.loads(target_goal_str)
-        # self.target_kick = {"name": "Ball", "color_name": "azul"}
-        # self.target_goal = {"name": "Ball", "color_name": "verde"}
+        try:
+            with open(self.json_path, 'r') as f:
+                data = json.load(f)
+
+            self.target_kick = data.get("target_kick", {"name": "Ball", "color_name": "azul"})
+            self.target_goal = data.get("target_goal", {"name": "Ball", "color_name": "verde"})
+
+            self.last_mtime = os.path.getmtime(self.json_path)
+
+            self.get_logger().info(f"✅ Targets cargados desde JSON:")
+            self.get_logger().info(f"   kick = {self.target_kick}")
+            self.get_logger().info(f"   goal = {self.target_goal}")
+
+        except Exception as e:
+            self.get_logger().error(f"Error al leer {self.json_path}: {e}")
+
+    def check_json_updates(self):
+        """Detecta si el archivo JSON cambió y recarga los parámetros."""
+        if not os.path.exists(self.json_path):
+            return
+
+        mtime = os.path.getmtime(self.json_path)
+        if mtime != self.last_mtime:
+            self.get_logger().info("🔄 Detectado cambio en archivo JSON. Recargando...")
+            self.load_targets_from_json()
+
+    # -------------------------------------------------------------------------
+    # CALLBACK DE PARÁMETROS (ROS2 DYNAMIC PARAMETERS)
+    # -------------------------------------------------------------------------
+    def parameters_callback(self, params):
+        """Permite actualizar parámetros dinámicamente con ros2 param set."""
+        for param in params:
+            if param.name == 'target_kick':
+                self.target_kick = json.loads(param.value)
+                self.get_logger().info(f"Nuevo target_kick: {self.target_kick}")
+            elif param.name == 'target_goal':
+                self.target_goal = json.loads(param.value)
+                self.get_logger().info(f"Nuevo target_goal: {self.target_goal}")
+        return SetParametersResult(successful=True)
 
     def apply_clahe(self, img_bgr):
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
